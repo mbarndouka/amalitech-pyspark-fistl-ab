@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
+import sys
 import logging
 from typing import Optional,Dict
 from pyspark.sql import SparkSession
-from settings import SparkSettings, get_settings
+from config.settings import SparkSettings, get_settings
 logger = logging.getLogger(__name__)
 
 _spark: Optional[SparkSession] = None
@@ -13,9 +15,13 @@ def build_spark_session(
         extract_config: dict[str, str] = None,
 ) -> SparkSession:
     """Get the Spark session."""
+    # Ensure Spark can find the correct Python executable on Windows
+    os.environ["PYSPARK_PYTHON"] = sys.executable
+    os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
     cfg = get_settings().spark
 
-    base_config = dict[str, str]={
+    base_config: dict[str, str] = {
         "spark.jars.packages": (
             "io.delta:delta-spark_2.12:3.1.0"
         ),

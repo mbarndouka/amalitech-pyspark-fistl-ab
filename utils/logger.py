@@ -13,28 +13,23 @@ Usage:
     log.info("ingestion_started", page=1, endpoint="/movie/popular")
 """
 
-from __future__ import annotations
-
 import logging
 import sys
-from structlog import configure
+from typing import Any, List
+import structlog
 from structlog.types import EventDict, WrappedLogger
+from config.settings import get_settings
 
-from config.settings import PipelineSettings, get_settings
 
-def _add_severity(
-        logger: WrappedLogger,
-        method_name: str,
-        event_dict: EventDict,
-)-> EventDict:
-    """Add severity to the log event."""
+def _add_severity(logger: WrappedLogger, method_name: str, event_dict: EventDict) -> EventDict:
     event_dict["severity"] = method_name.upper()
     return event_dict
 
-def configure_logger(settings: PipelineSettings) -> None:
-    """Configure the logger."""
+
+def configure_logger() -> None:
     settings = get_settings().pipeline
-    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    log_level = getattr(logging, settings.logging_level.upper(), logging.INFO)
+
     shared_processors: List[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
@@ -47,9 +42,9 @@ def configure_logger(settings: PipelineSettings) -> None:
     ]
 
     if settings.logging_format == "json":
-        shared_processors.append(structlog.processors.JSONRenderer())
+        renderer = structlog.processors.JSONRenderer()
     else:
-        shared_processors.append(structlog.dev.ConsoleRenderer())
+        renderer = structlog.dev.ConsoleRenderer()
 
     structlog.configure(
         processors=[*shared_processors, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
@@ -72,10 +67,9 @@ def configure_logger(settings: PipelineSettings) -> None:
     root_logger.setLevel(log_level)
     root_logger.addHandler(handler)
 
-
-    for noisy in ("py4j", "pyspark","urllib3"):
+    for noisy in ("py4j", "pyspark", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARN)
 
+
 def get_logger(name: str) -> WrappedLogger:
-    """Get a logger instance."""
     return structlog.get_logger(name)

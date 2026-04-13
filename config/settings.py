@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, settingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class tmdbSettings(BaseSettings):
     """TMDB api client settings."""
@@ -19,14 +19,14 @@ class tmdbSettings(BaseSettings):
     max_retries: int = Field(
         default=3,
         description="Maximum number of retries for TMDB API requests",
-        ge=0, le=0
+        ge=0, le=10
     )
     rate_limit: int = Field(
         default=40,
         description="Rate limit in seconds for TMDB API requests",
     )
     rate_limit_period: int = Field(default=10, description="Rate limit periode in seconds for TMDB API requests")
-    model_config = settingsConfigDict(env_prefix="TMDB_",env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="TMDB_",env_file=".env", extra="ignore")
 
 class storageSettings(BaseSettings):
     """Storage settings."""
@@ -34,7 +34,7 @@ class storageSettings(BaseSettings):
     processed_data_path: Path = Field(default=Path("data/processed"), description="Path to the processed data directory")
     cache_path: Path = Field(default=Path("data/cache"), description="Path to the cache directory")
 
-    model_config = settingsConfigDict(env_prefix="STORAGE_",env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="STORAGE_",env_file=".env", extra="ignore")
 
     def ensure_paths_exist(self):
         """Ensure that the specified paths exist, if not create them."""
@@ -51,7 +51,7 @@ class SparkSettings(BaseSettings):
     sql_shuffle_partitions: int = Field(default=10, description="Number of partitions for Spark SQL shuffle")
     spark_log_level: str = Field(default="WARN", description="Log level for Spark")
 
-    model_config = settingsConfigDict(env_prefix="SPARK_",env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="SPARK_",env_file=".env", extra="ignore")
 
     @field_validator("spark_log_level")
     @classmethod
@@ -64,21 +64,22 @@ class SparkSettings(BaseSettings):
 
 class PipelineSettings(BaseSettings):
     """Pipeline execution settings."""
+    env: str = Field(default="dev", description="Environment for the pipeline")
     batch_size: int = Field(default=10, description="Batch size for processing data")
     num_workers: int = Field(default=4, description="Number of worker threads for data processing")
     logging_level: str = Field(default="INFO", description="Logging level for the pipeline")
     logging_format: str = Field(default="json", description="Logging format")
 
-    model_config = settingsConfigDict(env_prefix="PIPELINE_",env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="PIPELINE_",env_file=".env", extra="ignore")
 
     @field_validator("env")
     @classmethod
     def validate_env(cls, value: str) -> str:
         """Validate the environment."""
-        valid_envs = ["dev", "prod"]
+        valid_envs = ["dev", "prod", "development"]
         if value.lower() not in valid_envs:
             raise ValueError(f"Invalid environment: {value}. Must be one of {valid_envs}")
-        return value.lower()
+        return "dev" if value.lower() == "development" else value.lower()
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -87,7 +88,7 @@ class Settings(BaseSettings):
     spark: SparkSettings = SparkSettings()
     pipeline: PipelineSettings = PipelineSettings()
 
-    model_config = settingsConfigDict(env_prefix="APP_",env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="APP_",env_file=".env", extra="ignore")
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
