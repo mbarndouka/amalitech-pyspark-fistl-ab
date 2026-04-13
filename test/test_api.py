@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock
 from utils.api import fetch_movie_detail, _merge_credits_into_detail
+import structlog
+from structlog.testing import capture_logs
 
 def test_fetch_movie_detail_success():
     # Mock httpx Client
@@ -25,15 +27,16 @@ def test_merge_credits_into_detail():
     assert len(merged["cast_raw"]) == 1
     assert merged["title"] == "Movie A"
 
-def test_fetch_movie_detail_not_found(caplog):
-    mock_client = MagicMock()
-    # Simulate a 404 error
-    from httpx import HTTPStatusError, Request, Response
-    request = Request("GET", "https://api.themoviedb.org/3/movie/999")
-    response = Response(404, request=request)
-    mock_client.get.side_effect = HTTPStatusError("Not Found", request=request, response=response)
+def test_fetch_movie_detail_not_found():
+    with capture_logs() as captured:
+        mock_client = MagicMock()
+        # Simulate a 404 error
+        from httpx import HTTPStatusError, Request, Response
+        request = Request("GET", "https://api.themoviedb.org/3/movie/999")
+        response = Response(404, request=request)
+        mock_client.get.side_effect = HTTPStatusError("Not Found", request=request, response=response)
 
-    result = fetch_movie_detail(mock_client, 999)
+        result = fetch_movie_detail(mock_client, 999)
 
-    assert result is None
-    assert "HTTP 404" in caplog.text
+        assert result is None
+        assert any("HTTP 404" in log["event"] for log in captured)

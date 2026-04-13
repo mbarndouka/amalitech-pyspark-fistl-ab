@@ -1,14 +1,25 @@
+import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Dict
 
+import tomli
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+def load_toml_config(file_path: str = "config.toml") -> Dict[str, Any]:
+    """Load configuration from a TOML file."""
+    path = Path(file_path)
+    if not path.exists():
+        return {}
+    with open(path, "rb") as f:
+        return tomli.load(f)
+
 class tmdbSettings(BaseSettings):
     """TMDB api client settings."""
-    api_key: str = Field(..., env="TMDB_API_KEY")
+    api_key: str = Field(default="", env="TMDB_API_KEY")
     baseUrl: str = Field(
-        default="https://api.themoviedb.org/3",
+        default="https://api.themoviedb.org/3/movie",
         description="Base url for TMDB API",
     )
 
@@ -83,14 +94,34 @@ class PipelineSettings(BaseSettings):
 
 class Settings(BaseSettings):
     """Application settings."""
-    tmdb: tmdbSettings = tmdbSettings()
-    storage: storageSettings = storageSettings()
-    spark: SparkSettings = SparkSettings()
-    pipeline: PipelineSettings = PipelineSettings()
+    tmdb: tmdbSettings
+    storage: storageSettings
+    spark: SparkSettings
+    pipeline: PipelineSettings
 
-    model_config = SettingsConfigDict(env_prefix="APP_",env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="ignore")
+
+    @classmethod
+    def from_toml(cls, file_path: str = "config.toml") -> "Settings":
+        """Create settings from a TOML file merged with environment variables."""
+        toml_data = load_toml_config(file_path)
+
+        return cls(
+            tmdb=tmdbSettings(**toml_data.get("tmdb", {})),
+            storage=storageSettings(**toml_data.get("storage", {})),
+            spark=SparkSettings(**toml_data.get("spark", {})),
+            pipeline=PipelineSettings(**toml_data.get("pipeline", {})),
+        )
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Get the application settings."""
-    return Settings()
+    try:
+        return Settings.from_toml()
+    except Exception:
+        return Settings(
+            tmdb=tmdbSettings(),
+            storage=storageSettings(),
+            spark=SparkSettings(),
+            pipeline=PipelineSettings(),
+        )
