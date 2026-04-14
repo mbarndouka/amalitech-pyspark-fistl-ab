@@ -1,5 +1,5 @@
 [tmdb]
-baseUrl = "https://api.themoviedb.org/3/movie"
+baseUrl = "https://api.themoviedb.org/3"
 request_timeout = 10
 max_retries = 3
 rate_limit = 40

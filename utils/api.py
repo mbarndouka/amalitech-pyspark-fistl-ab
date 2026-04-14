@@ -11,8 +11,8 @@ Design note: all public functions are pure transformations or I/O wrappers
 that surface errors explicitly rather than swallowing them.
 """
 
-import time
-from typing import Any, Iterator, Optional
+import asyncio
+from typing import Any, Optional
 
 import httpx
 from tenacity import (
@@ -31,106 +31,102 @@ logger = get_logger(__name__)
 # HTTP client factory
 # ---------------------------------------------------------------------------
 
-def _get_client() -> httpx.Client:
-    """Return an httpx Client pre-configured with auth and timeouts."""
+def _get_async_client() -> httpx.AsyncClient:
+    """Return an httpx AsyncClient pre-configured with auth and timeouts."""
     settings = get_settings().tmdb
-    return httpx.Client(
+    return httpx.AsyncClient(
         base_url=settings.baseUrl,
         params={"api_key": settings.api_key},
         timeout=settings.request_timeout,
+        http2=True,
     )
 
 # ---------------------------------------------------------------------------
-# Retry-enabled fetchers (I/O wrappers)
+# Retry-enabled async fetcher
 # ---------------------------------------------------------------------------
 
 @retry(
-    retry=retry_if_exception_type(httpx.HTTPError),
+    retry=retry_if_exception_type(httpx.RequestError),
     stop=stop_after_attempt(3),
     wait=wait_exponential_jitter(initial=1, max=10),
     reraise=False,
 )
-def fetch_movie_detail(client: httpx.Client, movie_id: int) -> Optional[dict[str, Any]]:
+async def fetch_movie_with_credits_async(
+    client: httpx.AsyncClient, movie_id: int
+) -> Optional[dict[str, Any]]:
     """
-    Fetch the /movie/{id} endpoint.
-    Returns the parsed JSON dict on success, or None if the request fails.
+    Fetch the /movie/{id} endpoint with embedded credits.
+    Returns the parsed and merged JSON dict on success, or None if the request fails.
     """
     try:
-        response = client.get(f"/movie/{movie_id}")
+        response = await client.get(
+            f"/movie/{movie_id}",
+            params={"append_to_response": "credits", "language": "en-US"}
+        )
+
+        if response.status_code == 404:
+            logger.warning(f"Movie {movie_id} not found (404). Skipping.")
+            return None
+
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+
+        credits = data.pop("credits", {})
+        data["cast_raw"] = credits.get("cast", [])
+        data["crew_raw"] = credits.get("crew", [])
+
+        logger.info(f"Successfully fetched movie_id={movie_id} + credits.")
+        return data
+
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            logger.error(f"Server error {exc.response.status_code} for movie_id={movie_id}. Retrying...")
+            raise httpx.RequestError(f"Server error {exc.response.status_code}", request=exc.request) from exc
+
         logger.warning(f"HTTP {exc.response.status_code} for movie_id={movie_id} — skipping.")
         return None
     except httpx.RequestError as exc:
         logger.error(f"Network error for movie_id={movie_id}: {exc}")
-        return None
-
-@retry(
-    retry=retry_if_exception_type(httpx.HTTPError),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential_jitter(initial=1, max=10),
-    reraise=False,
-)
-def fetch_movie_credits(client: httpx.Client, movie_id: int) -> Optional[dict[str, Any]]:
-    """
-    Fetch the /movie/{id}/credits endpoint.
-    Returns the parsed JSON dict on success, or None on failure.
-    """
-    try:
-        response = client.get(f"/movie/{movie_id}/credits")
-        response.raise_for_status()
-        return response.json()
-    except httpx.RequestError as exc:
-        logger.warning(f"Could not fetch credits for movie_id={movie_id}: {exc}")
-        return None
+        raise
 
 # ---------------------------------------------------------------------------
-# Merge helper (Pure Function)
+# Concurrency / Orchestration
 # ---------------------------------------------------------------------------
 
-def _merge_credits_into_detail(
-    detail: dict[str, Any],
-    credits: Optional[dict[str, Any]],
-) -> dict[str, Any]:
+async def _fetch_all_movies_async(movie_ids: list[int], max_concurrent: int = 15) -> list[dict[str, Any]]:
     """
-    Attach cast/crew lists from credits into the detail dict.
-    Pure function — does not mutate inputs.
+    Asynchronously fetch all movies bounded by a concurrency semaphore.
     """
-    cast = (credits or {}).get("cast", [])
-    crew = (credits or {}).get("crew", [])
+    semaphore = asyncio.Semaphore(max_concurrent)
 
-    return {
-        **detail,
-        "cast_raw": cast,
-        "crew_raw": crew,
-    }
+    async with _get_async_client() as client:
+
+        async def fetch_with_semaphore(movie_id: int) -> Optional[dict[str, Any]]:
+            async with semaphore:
+                return await fetch_movie_with_credits_async(client, movie_id)
+
+        tasks = [fetch_with_semaphore(movie_id) for movie_id in movie_ids]
+
+        logger.info(f"Starting batch fetch for {len(movie_ids)} movies...")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        valid_results: list[dict[str, Any]] = []
+        for r in results:
+            if isinstance(r, Exception):
+                logger.error(f"Batch fetch encountered an error: {r}")
+            elif r is not None:
+                valid_results.append(r)
+
+        logger.info(f"Batch fetch completed: {len(valid_results)} / {len(movie_ids)} movies downloaded successfully.")
+        return valid_results
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point (Synchronous compatibility layer)
 # ---------------------------------------------------------------------------
 
 def fetch_all_movies(movie_ids: list[int]) -> list[dict[str, Any]]:
     """
-    Fetch detail + credits for every movie ID and return a list of merged dicts.
+    Fetch detail + credits for every movie ID using async concurrency under the hood.
+    Synchronous wrapper to maintain API compatibility with current application.
     """
-    settings = get_settings().tmdb
-    results: list[dict[str, Any]] = []
-
-    with _get_client() as client:
-        for movie_id in movie_ids:
-            logger.info(f"Fetching movie_id={movie_id} …")
-
-            detail = fetch_movie_detail(client, movie_id)
-            if not detail:
-                continue
-
-            credits = fetch_movie_credits(client, movie_id)
-            merged = _merge_credits_into_detail(detail, credits)
-            results.append(merged)
-
-            # Polite delay based on settings
-            time.sleep(settings.rate_limit_period / settings.rate_limit)
-
-    logger.info(f"Fetched {len(results)} / {len(movie_ids)} movies successfully.")
-    return results
+    return asyncio.run(_fetch_all_movies_async(movie_ids, max_concurrent=15))
