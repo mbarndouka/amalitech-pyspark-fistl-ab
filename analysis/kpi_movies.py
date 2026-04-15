@@ -72,7 +72,7 @@ def rank_movies(
             "release_date",
             F.col(metric_col).alias(label),
         )
-        .orderBy("rank")
+        .orderBy("rank").limit(5)
     )
 
 

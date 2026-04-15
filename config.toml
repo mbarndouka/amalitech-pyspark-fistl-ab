@@ -25,3 +25,23 @@ num_workers = 4
 logging_level = "INFO"
 logging_format = "json"
 
+[visualization]
+# Primary palette — used for series, bars, scatter points
+palette = ["#E74C3C", "#3498DB", "#2ECC71", "#F39C12", "#9B59B6", "#1ABC9C", "#E67E22", "#E91E63"]
+# Diverging pair for Franchise / Standalone comparisons
+franchise_color  = "#3498DB"
+standalone_color = "#E74C3C"
+# Canvas
+background_color = "#1A1A2E"
+surface_color    = "#16213E"
+grid_color       = "#2D2D44"
+# Typography
+text_color       = "#EAEAEA"
+muted_color      = "#8899AA"
+# Figure defaults
+fig_dpi    = 150
+fig_width  = 14
+fig_height = 8
+# Where to save PNG files
+output_dir = "data/plots"
+

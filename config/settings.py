@@ -92,12 +92,31 @@ class PipelineSettings(BaseSettings):
             raise ValueError(f"Invalid environment: {value}. Must be one of {valid_envs}")
         return "dev" if value.lower() == "development" else value.lower()
 
+class VizSettings(BaseSettings):
+    """Visualization palette and layout settings (read from config.toml [visualization])."""
+    palette:          list[str] = Field(default=["#E74C3C", "#3498DB", "#2ECC71", "#F39C12", "#9B59B6"])
+    franchise_color:  str       = Field(default="#3498DB")
+    standalone_color: str       = Field(default="#E74C3C")
+    background_color: str       = Field(default="#1A1A2E")
+    surface_color:    str       = Field(default="#16213E")
+    grid_color:       str       = Field(default="#2D2D44")
+    text_color:       str       = Field(default="#EAEAEA")
+    muted_color:      str       = Field(default="#8899AA")
+    fig_dpi:          int       = Field(default=150)
+    fig_width:        int       = Field(default=14)
+    fig_height:       int       = Field(default=8)
+    output_dir:       str       = Field(default="data/plots")
+
+    model_config = SettingsConfigDict(env_prefix="VIZ_", env_file=".env", extra="ignore")
+
+
 class Settings(BaseSettings):
     """Application settings."""
-    tmdb: tmdbSettings
-    storage: storageSettings
-    spark: SparkSettings
-    pipeline: PipelineSettings
+    tmdb:          tmdbSettings
+    storage:       storageSettings
+    spark:         SparkSettings
+    pipeline:      PipelineSettings
+    visualization: VizSettings
 
     model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="ignore")
 
@@ -111,6 +130,7 @@ class Settings(BaseSettings):
             storage=storageSettings(**toml_data.get("storage", {})),
             spark=SparkSettings(**toml_data.get("spark", {})),
             pipeline=PipelineSettings(**toml_data.get("pipeline", {})),
+            visualization=VizSettings(**toml_data.get("visualization", {})),
         )
 
 @lru_cache(maxsize=1)
