@@ -1,53 +1,55 @@
 import os
-from dotenv import load_dotenv
+import pathlib
 
 from utils.api import fetch_all_movies
 from config.spark_config import get_spark
 from utils.logger import get_logger
-import pathlib
+from utils.parquet import write_parquet
+from ingestion.schema import MOVIE_SCHEMA
 
 logger = get_logger(__name__)
 
+MOVIE_IDS = [
+    299534, 19995, 140607, 299536, 597, 135397, 420818,
+    24428, 168259, 99861, 284054, 12445, 181808, 330457,
+    351286, 109445, 321612, 260513,
+]
+
+
 def run_ingestion():
+    from dotenv import load_dotenv
     load_dotenv()
 
-    movie_ids = [0, 299534, 19995, 140607, 299536, 597, 135397, 420818, 24428, 168259, 99861, 284054, 12445, 181808, 330457, 351286, 109445, 321612, 260513]
+    logger.info(f"Starting ingestion for {len(MOVIE_IDS)} movies")
 
-    logger.info(f"starting_ingestion {len(movie_ids)} movies")
-
-    movies_data = fetch_all_movies(movie_ids)
+    movies_data = fetch_all_movies(MOVIE_IDS)
     if not movies_data:
-        logger.warning("No movies found")
+        logger.warning("No movies returned from API — aborting ingestion")
         return
 
     spark = get_spark()
 
     try:
-        # Avoid java.lang.UnsatisfiedLinkError from Hadoop's NativeIO on Windows
+        # Explicit schema prevents Spark from inferring string fields as
+        # IntegerType when they happen to be null across the entire batch.
+        # createDataFrame(list, schema) uses the driver-side Row conversion path
+        # and avoids spawning Python worker processes (which fail to connect back
+        # on this Windows machine due to socket/firewall policy).
+        df = spark.createDataFrame(movies_data, schema=MOVIE_SCHEMA)
 
-        df = spark.createDataFrame(movies_data)
-
-        # Idempotency: Drop duplicate records based on the movie 'id' if any exist in the API response
-        if 'id' in df.columns:
-            df = df.dropDuplicates(['id'])
-
-        df.cache() # Cache to avoid re-computation and potentially multiple write attempts
-        df.printSchema()
-
-        output_dir = pathlib.Path(os.getcwd()) / "data" / "raw"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = str(output_dir / "movies.parquet")
+        if "id" in df.columns:
+            df = df.dropDuplicates(["id"])
 
         count = df.count()
-        logger.info(f"writing {count} records to {output_path}")
+        logger.info(f"DataFrame created: {count} rows | {len(df.columns)} columns")
+        df.printSchema()
 
-        # Collect to pandas and write via pyarrow to avoid Hadoop winutils
-        # permission errors on Windows (ExitCode -1073741515 / STATUS_DLL_NOT_FOUND)
-        df.toPandas().to_parquet(output_path, index=False, engine="pyarrow")
-        # df.write.mode("overwrite").parquet(output_path)
+        output_path = pathlib.Path(os.getcwd()) / "data" / "raw" / "movies.parquet"
+        logger.info(f"Writing {count} records to {output_path}")
+        write_parquet(df, output_path)
 
-        logger.info("ingestion completed successfully")
+        logger.info("Ingestion completed successfully")
 
     except Exception as e:
-        logger.error(f"ingestion failed with error {e}")
+        logger.error(f"Ingestion failed: {e}")
         raise

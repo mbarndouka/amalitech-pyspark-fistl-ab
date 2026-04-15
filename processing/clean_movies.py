@@ -1,16 +1,14 @@
 import os
 import pathlib
-import shutil
 from functools import reduce
 from operator import add
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType
 
 from config.spark_config import get_spark
 from utils.logger import get_logger
+from utils.parquet import write_parquet
 
 logger = get_logger(__name__)
 
@@ -296,25 +294,9 @@ def run_cleaning():
         # Steps 10–11 — reorder columns and reset index
         df = _finalize(df)
 
-        # Persist result
-        output_dir = pathlib.Path(os.getcwd()) / "data" / "processed"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / "movies_cleaned.parquet"
-
-        # Remove any prior output (native Spark write leaves an empty directory on
-        # Windows without Hadoop winutils; pyarrow requires a clean file path)
-        if output_path.exists():
-            if output_path.is_dir():
-                shutil.rmtree(output_path)
-            else:
-                output_path.unlink()
-
+        output_path = pathlib.Path(os.getcwd()) / "data" / "processed" / "movies_cleaned.parquet"
         logger.info(f"Saving cleaned data to: {output_path}")
-        # Windows workaround: native Spark parquet write requires Hadoop winutils.
-        # Collect to driver and write with pyarrow directly instead.
-        rows = df.collect()
-        arrow_table = pa.table({col: [row[col] for row in rows] for col in df.columns})
-        pq.write_table(arrow_table, str(output_path))
+        write_parquet(df, output_path)
         logger.info("Cleaning completed successfully")
 
         return df
