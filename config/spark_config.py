@@ -43,6 +43,8 @@ def build_spark_session(
         "spark.sql.parquet.mergeSchema": "false",
         "spark.sql.parquet.filterPushdown": "true",
         "spark.hadoop.parquet.enable.summary-metadata": "false",
+        "spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version": "2",
+        "spark.hadoop.mapreduce.fileoutputcommitter.cleanup-failures.ignored": "true",
     }
 
     if extract_config:
