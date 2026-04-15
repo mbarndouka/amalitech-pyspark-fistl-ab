@@ -31,3 +31,9 @@ black==24.4.2
 ruff==0.4.4
 mypy==1.10.0
 pre-commit==3.7.1
+
+
+pyarrow==16.1.0
+tomli==2.0.1
+
+pytest-asyncio==0.23.6

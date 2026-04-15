@@ -7,7 +7,6 @@ would normally come from seaborn is replicated via matplotlib rcParams and
 manual aesthetic choices driven by VizSettings in config.toml.
 """
 
-import os
 import pathlib
 from collections import defaultdict
 
@@ -29,9 +28,20 @@ logger = get_logger(__name__)
 
 # ── Data loading ───────────────────────────────────────────────────────────────
 
-def _load() -> dict:
-    """Read the cleaned parquet and return a plain dict of Python lists."""
-    path = pathlib.Path(os.getcwd()) / "data" / "processed" / "movies_cleaned.parquet"
+def _load(df=None) -> dict:
+    """Return movie data as a plain dict of Python lists.
+
+    Args:
+        df: Optional cleaned Spark DataFrame. When provided it is collected
+            and converted via PyArrow (same type handling as the parquet path)
+            so no intermediate file write is required.
+            When None the cleaned parquet on disk is read directly.
+    """
+    if df is not None:
+        from utils.parquet import spark_df_to_dict
+        return spark_df_to_dict(df)
+    from config.settings import get_settings
+    path = get_settings().storage.processed_data_path / "movies_cleaned.parquet"
     return pq.read_table(path).to_pydict()
 
 
@@ -369,15 +379,22 @@ def plot_franchise_vs_standalone(data: dict, v, output_dir: pathlib.Path) -> pat
 
 # ── Pipeline entry point ───────────────────────────────────────────────────────
 
-def run_visualization():
+def run_visualization(df=None):
+    """Generate all 5 charts and save them to the configured output directory.
+
+    Args:
+        df: Optional cleaned Spark DataFrame from run_cleaning(). When provided
+            data is read directly from the DataFrame (no parquet file needed).
+            When None the cleaned parquet on disk is read via PyArrow.
+    """
     logger.info("Starting visualization pipeline")
     settings = get_settings()
     v = settings.visualization
 
     _apply_theme(v)
 
-    output_dir = pathlib.Path(os.getcwd()) / v.output_dir
-    data = _load()
+    output_dir = pathlib.Path(v.output_dir)
+    data = _load(df)
     logger.info(f"Loaded {len(data['title'])} movies for visualization")
 
     plot_revenue_vs_budget(data, v, output_dir)

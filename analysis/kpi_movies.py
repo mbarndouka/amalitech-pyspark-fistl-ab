@@ -1,9 +1,9 @@
-import os
 from pyspark.sql import functions as F
 from pyspark.sql import Window
 from pyspark.sql.types import DoubleType
 
 from config.spark_config import get_spark
+from config.settings import get_settings
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,7 +17,8 @@ TOP_N = 5  # rows returned per KPI table
 
 @F.udf(returnType=DoubleType())
 def profit_udf(revenue_musd: float, budget_musd: float):
-    """Revenue minus budget (million USD). Returns None if either input is null."""
+    """Revenue minus budget (million USD).
+    Returns None if either input is null."""
     if revenue_musd is None or budget_musd is None:
         return None
     return round(revenue_musd - budget_musd, 2)
@@ -25,7 +26,8 @@ def profit_udf(revenue_musd: float, budget_musd: float):
 
 @F.udf(returnType=DoubleType())
 def roi_udf(revenue_musd: float, budget_musd: float):
-    """Revenue divided by budget. Returns None when budget is null or zero."""
+    """Revenue divided by budget.
+    Returns None when budget is null or zero."""
     if revenue_musd is None or budget_musd is None or budget_musd == 0.0:
         return None
     return round(revenue_musd / budget_musd, 4)
@@ -72,7 +74,7 @@ def rank_movies(
             "release_date",
             F.col(metric_col).alias(label),
         )
-        .orderBy("rank").limit(5)
+        .orderBy("rank").limit(n)
     )
 
 
@@ -87,20 +89,28 @@ def _show(title: str, ranked_df):
 
 # ── KPI runner ─────────────────────────────────────────────────────────────────
 
-def run_kpi():
+def run_kpi(df=None):
+    """Run all 10 KPI rankings.
+
+    Args:
+        df: Optional cleaned Spark DataFrame from run_cleaning(). When None
+            the cleaned parquet on disk is read instead (standalone mode).
+    """
     spark = get_spark()
     logger.info("Starting KPI analysis")
 
     try:
-        input_path = os.path.join(os.getcwd(), "data", "processed", "movies_cleaned.parquet")
-        logger.info(f"Reading cleaned data from: {input_path}")
+        if df is None:
+            input_path = str(get_settings().storage.processed_data_path / "movies_cleaned.parquet")
+            logger.info(f"Reading cleaned data from: {input_path}")
+            df = spark.read.parquet(input_path)
 
-        df = spark.read.parquet(input_path)
-        logger.info(f"Loaded {df.count()} rows | {len(df.columns)} columns")
+        logger.info(f"Loaded DataFrame | {len(df.columns)} columns")
 
         # ── Derived metrics via UDFs ───────────────────────────────────────────
         df = df.withColumn("profit_musd", profit_udf(F.col("revenue_musd"), F.col("budget_musd")))
         df = df.withColumn("roi",         roi_udf(F.col("revenue_musd"),    F.col("budget_musd")))
+        df = df.cache()
 
         # ── 1. Highest Revenue ─────────────────────────────────────────────────
         _show(
@@ -176,6 +186,7 @@ def run_kpi():
             rank_movies(df, "popularity", "popularity"),
         )
 
+        df.unpersist()
         logger.info("KPI analysis completed")
 
     except Exception as e:

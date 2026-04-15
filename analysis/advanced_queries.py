@@ -1,4 +1,3 @@
-import os
 from pyspark.sql import functions as F
 from config.spark_config import get_spark
 from utils.logger import get_logger
@@ -8,10 +7,17 @@ logger = get_logger(__name__)
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
-def _load_df(spark):
-    """Read the cleaned parquet and add derived columns used across all queries."""
-    input_path = os.path.join(os.getcwd(), "data", "processed", "movies_cleaned.parquet")
-    df = spark.read.parquet(input_path)
+def _load_df(spark, df=None):
+    """Return a DataFrame with derived profit/roi columns ready for all queries.
+
+    Args:
+        spark: Active SparkSession.
+        df:    Optional cleaned DataFrame. When None the parquet on disk is read.
+    """
+    if df is None:
+        from config.settings import get_settings
+        input_path = str(get_settings().storage.processed_data_path / "movies_cleaned.parquet")
+        df = spark.read.parquet(input_path)
 
     # profit and roi are derived here (not stored in parquet) so every query
     # section can use them without re-importing the UDFs from kpi_movies.
@@ -29,6 +35,7 @@ def _load_df(spark):
             F.round(F.col("revenue_musd") / F.col("budget_musd"), 4),
         ),
     )
+    df = df.cache()
     return df
 
 
@@ -184,13 +191,19 @@ def most_successful_directors(df):
 
 # ── Pipeline entry point ───────────────────────────────────────────────────────
 
-def run_advanced_queries():
+def run_advanced_queries(df=None):
+    """Run all franchise, director, and search queries.
+
+    Args:
+        df: Optional cleaned Spark DataFrame from run_cleaning(). When None
+            the cleaned parquet on disk is read instead (standalone mode).
+    """
     spark = get_spark()
     logger.info("Starting advanced queries and franchise analysis")
 
     try:
-        df = _load_df(spark)
-        logger.info(f"Loaded {df.count()} rows | {len(df.columns)} columns")
+        df = _load_df(spark, df)
+        logger.info(f"Loaded DataFrame | {len(df.columns)} columns")
 
         # Section 2 — Search queries
         search_scifi_action_bruce_willis(df)
@@ -205,6 +218,7 @@ def run_advanced_queries():
         # Section 5 — Most Successful Directors
         most_successful_directors(df)
 
+        df.unpersist()
         logger.info("Advanced queries completed")
 
     except Exception as e:

@@ -1,5 +1,3 @@
-import os
-import pathlib
 from functools import reduce
 from operator import add
 
@@ -7,6 +5,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType
 
 from config.spark_config import get_spark
+from config.settings import get_settings
 from utils.logger import get_logger
 from utils.parquet import write_parquet
 
@@ -188,11 +187,9 @@ def _replace_unrealistic(df):
 
 def _remove_duplicates(df):
     """Drop duplicate movie ids and rows with an unknown id or title."""
-    before = df.count()
     df = df.dropDuplicates(["id"])
     df = df.filter(F.col("id").isNotNull() & F.col("title").isNotNull())
-    after = df.count()
-    logger.info(f"Duplicate / unknown-id removal: {before} → {after} rows")
+    logger.info("Duplicate / unknown-id removal: complete")
     return df
 
 
@@ -204,10 +201,8 @@ def _filter_min_non_null(df, min_non_null: int = 10):
         add,
         [F.col(c).isNotNull().cast("int") for c in df.columns],
     )
-    before = df.count()
     df = df.filter(non_null_count >= min_non_null)
-    after = df.count()
-    logger.info(f"Min-non-null filter (>= {min_non_null}): {before} → {after} rows")
+    logger.info(f"Min-non-null filter (>= {min_non_null}): applied")
     return df
 
 
@@ -215,10 +210,8 @@ def _filter_min_non_null(df, min_non_null: int = 10):
 
 def _filter_released(df):
     """Keep only movies with status == 'Released', then drop the status column."""
-    before = df.count()
     df = df.filter(F.col("status") == "Released").drop("status")
-    after = df.count()
-    logger.info(f"Released-status filter: {before} → {after} rows")
+    logger.info("Released-status filter: applied")
     return df
 
 
@@ -245,16 +238,30 @@ def _finalize(df):
 
 # ── Pipeline entry point ───────────────────────────────────────────────────────
 
-def run_cleaning():
+def run_cleaning(df=None, persist: bool = False):
+    """Run the full cleaning pipeline and return the cleaned DataFrame.
+
+    Args:
+        df:      Optional raw Spark DataFrame from run_ingestion(). When None
+                 the raw parquet on disk is read instead (standalone mode).
+        persist: Write the cleaned result to disk. Defaults to False — when the
+                 full pipeline runs in-memory there is no need for a checkpoint.
+                 Set to True when running cleaning in isolation or for archiving.
+
+    Returns:
+        Cleaned Spark DataFrame.
+    """
     spark = get_spark()
     logger.info("Starting data cleaning step")
 
     try:
-        input_path = os.path.join(os.getcwd(), "data", "raw", "movies.parquet")
-        logger.info(f"Reading raw data from: {input_path}")
+        if df is None:
+            storage = get_settings().storage
+            input_path = str(storage.raw_data_path / "movies.parquet")
+            logger.info(f"Reading raw data from: {input_path}")
+            df = spark.read.parquet(input_path)
 
-        df = spark.read.parquet(input_path)
-        logger.info(f"Row count: {df.count()} | Columns: {len(df.columns)}")
+        logger.info(f"Columns: {len(df.columns)}")
         logger.info("Original schema:")
         df.printSchema()
 
@@ -294,11 +301,12 @@ def run_cleaning():
         # Steps 10–11 — reorder columns and reset index
         df = _finalize(df)
 
-        output_path = pathlib.Path(os.getcwd()) / "data" / "processed" / "movies_cleaned.parquet"
-        logger.info(f"Saving cleaned data to: {output_path}")
-        write_parquet(df, output_path)
-        logger.info("Cleaning completed successfully")
+        if persist:
+            output_path = get_settings().storage.processed_data_path / "movies_cleaned.parquet"
+            logger.info(f"Saving cleaned data to: {output_path}")
+            write_parquet(df, output_path)
 
+        logger.info("Cleaning completed successfully")
         return df
 
     except Exception as e:

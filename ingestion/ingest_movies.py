@@ -1,31 +1,35 @@
-import os
-import pathlib
+from pyspark.sql import DataFrame
 
 from utils.api import fetch_all_movies
 from config.spark_config import get_spark
+from config.settings import get_settings
 from utils.logger import get_logger
 from utils.parquet import write_parquet
 from ingestion.schema import MOVIE_SCHEMA
 
 logger = get_logger(__name__)
 
-MOVIE_IDS = [
-    299534, 19995, 140607, 299536, 597, 135397, 420818,
-    24428, 168259, 99861, 284054, 12445, 181808, 330457,
-    351286, 109445, 321612, 260513,
-]
 
+def run_ingestion(persist: bool = True) -> DataFrame:
+    """Fetch movies from the TMDB API and return a Spark DataFrame.
 
-def run_ingestion():
-    from dotenv import load_dotenv
-    load_dotenv()
+    Args:
+        persist: Write the raw DataFrame to disk as a parquet checkpoint.
+                 Defaults to True — API responses are rate-limited and slow to
+                 re-fetch, so caching them is almost always worthwhile.
 
-    logger.info(f"Starting ingestion for {len(MOVIE_IDS)} movies")
+    Returns:
+        Raw Spark DataFrame (one row per movie, including cast_raw / crew_raw).
+    """
+    settings = get_settings()
+    movie_ids = settings.pipeline.movie_ids
 
-    movies_data = fetch_all_movies(MOVIE_IDS)
+    logger.info(f"Starting ingestion for {len(movie_ids)} movies")
+
+    movies_data = fetch_all_movies(movie_ids)
     if not movies_data:
         logger.warning("No movies returned from API — aborting ingestion")
-        return
+        return None
 
     spark = get_spark()
 
@@ -40,15 +44,16 @@ def run_ingestion():
         if "id" in df.columns:
             df = df.dropDuplicates(["id"])
 
-        count = df.count()
-        logger.info(f"DataFrame created: {count} rows | {len(df.columns)} columns")
+        logger.info(f"DataFrame created: {len(df.columns)} columns")
         df.printSchema()
 
-        output_path = pathlib.Path(os.getcwd()) / "data" / "raw" / "movies.parquet"
-        logger.info(f"Writing {count} records to {output_path}")
-        write_parquet(df, output_path)
+        if persist:
+            output_path = settings.storage.raw_data_path / "movies.parquet"
+            logger.info(f"Writing raw records to {output_path}")
+            write_parquet(df, output_path)
 
         logger.info("Ingestion completed successfully")
+        return df
 
     except Exception as e:
         logger.error(f"Ingestion failed: {e}")
